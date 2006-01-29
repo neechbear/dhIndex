@@ -1,0 +1,245 @@
+<%init>
+	my $hide_files = qr(images|lib|robots.txt|favicon.ico|thumbnail|dhandler|autohandler|.+\.footer);
+	my $index_files = qr!^index\.([xpms]?html?|php[34]?|stm|cgi|pl)$!;
+	my $icons_dir = 'lib/icons'; # Usually 'icons';
+	my @icon_size = qw(16 16);
+	my @column_sizes = qw(80 55 23 17);
+	my $type_text = 'extension'; # Use "extension" or "mimetype" (default is extension)
+	#my $date_format = '%a %b %e %H:%M:%S %Y'; # %d/%m/%Y %R # %a %b %e %H:%M:%S %Y
+	my $date_format = '%d/%m/%Y %R'; # %d/%m/%Y %R # %a %b %e %H:%M:%S %Y
+</%init>
+<%doc>
+# vim:ts=4:sw=4:tw=78
+
+=pod
+
+=head1 NAME
+
+dhandler - XHTML 1.1 Strict Compliant Directory Listing DHandler
+
+=head1 VERSION
+
+$Revision: 1.3 $
+
+=head1 AUTHOR
+
+Nicola Elizabeth Worthington <nicolaworthington@msn.com>
+
+http://www.nicolaworthington.com
+
+$Author: nicolaw $
+
+=cut
+
+</%doc>
+<%filter>
+	s,^([^/]),\t\t\t$1,mg;
+	s,^/,,mg;
+</%filter>
+<%method dhIndexCSS>\
+		<style type="text/css">
+			div.dhIndex {
+				font-family: Tahoma, sans-serif;
+				font-size: 8pt;
+			}
+			div.dhIndex img {
+				margin-bottom: 1px;
+				vertical-align: middle;
+				border: 0px;
+				width: 16px;
+				height: 16px;
+			}
+			div.dhIndex a {
+				position: relative;
+			}
+			div.dhIndex a span {
+				display: none;
+			}
+			div.dhIndex a:hover span {
+				display: block;
+				background: #ffffe1;
+				border: 1px #000000 solid;
+				padding: 7px 7px 7px 7px;
+				position: absolute;
+				top: 7px;
+				left: 30px;
+				z-index: 1;
+				width: 210px;
+				filter:alpha(opacity=50);
+				-moz-opacity:0.5;
+				opacity: 0.5;
+			}
+			div.dhIndex a, div.dhIndex a:visited {
+				color: #000000;
+				text-decoration: none;
+				white-space: nowrap;
+			}
+			div.dhIndex img.denied {
+				filter:alpha(opacity=50);
+				-moz-opacity:0.5;
+				opacity: 0.5;
+			}
+			div.dhIndex a:hover {
+				text-decoration: underline;
+			}
+		</style>\
+</%method>
+<table cellspacing="0" cellpadding="0" border="0">
+	<tr>
+		<td align="left" valign="top">
+			 <div class="dhIndex">
+%	for (my $i = 0; $i < @raw; $i++) {
+%		my $file = $raw[$i];
+%		my $fileInfoTooltip = genFileInfo($file,$format,$type_text,$ft,$date_format);
+%		(my $fileInfoStatusbar = $fileInfoTooltip) =~ s/<br \/>/ /g;
+				<a href="<% $file |u %><% (-d "$dir/$file" ? '/' : '') %>">\
+<img src="/<% $icons_dir %>/<% file2icon("$dir/$file",$index) %>.gif" width="<% $icon_size[0] %>" height="<% $icon_size[1] %>" alt="<% $file |h %>" <% checkPerms("$dir/$file") %>/></a>\
+ <a href="<% $file |u %><% (-d "$dir/$file" ? '/' : '') %>" onmouseover="window.status='<% $fileInfoStatusbar %>'; return true" onmouseout="window.status='';return true"><% $file |h %><span><% $fileInfoTooltip %></span></a><br />
+%		if ($columns > 1 && ($i+1) % $itemsPerColumn == 0 && @raw > 10) {
+			</div>
+		</td>
+		<td style="width: 50px;">&nbsp;</td>
+		<td align="left" valign="top">
+			<div class="dhIndex">
+%		}
+%	}
+			</div>
+		</td>
+	</tr>
+</table>\
+<%init>
+	(my $uri = $r->uri) =~ s,^/,,;
+	(my $uri_file = $uri) =~ s,.*/,,;
+	my $path_info = $r->path_info;
+	my $dhandler_arg = $m->dhandler_arg;
+	my $dir = sprintf('%s/%s',$r->document_root,$dhandler_arg);
+
+	# Ensure directory URLs always have a trailing slash
+	if (-d $dir && $r->uri !~ m/\/$/) {
+		my $s = $r->server;
+		$m->clear_buffer;
+		$m->redirect(sprintf('http://%s%s/', $s->server_hostname, $r->uri));
+	}
+
+	# Decline to handle the location (or redirect) if we cannot open the directory
+	unless (-d $dir && chdir $dir && opendir(DH,$dir)) {
+		my $s = $r->server;
+		$m->clear_buffer;
+		$m->redirect(sprintf('http://%s', $s->server_hostname));
+	}
+
+	# Read the dorectory contents
+	my @raw = grep(!/^(\.\.?([^\.].*)?|$hide_files|$uri_file)$/,readdir(DH));
+	closedir(DH) || warn "Unable to close directory '$dir': $!";
+
+	# Redirect to any readable index files if they exist instead of doing a listing
+	if (my @indexes = grep(/$index_files/,@raw)) {
+		for my $index (@indexes) {
+			next unless -r "$dir/$index";
+			$m->clear_buffer;
+			$m->redirect($index);
+		}
+	}
+
+	$r->content_type('text/html');
+	my (@dirs,@files);
+	for (@raw) {
+		if (-d "$dir/$_") { push @dirs,$_ }
+		else { push @files,$_ }
+	}
+	@dirs = sort {lc $a cmp lc $b} @dirs;
+	@files = sort {lc $a cmp lc $b} @files;
+	unshift @dirs, '..' if $uri !~ m|^/?$|;
+	@raw = (@dirs,@files);
+
+	my ($columns, $maxFilenameLength) = (1,0);
+	for (@raw) { $maxFilenameLength = length($_) if length($_) > $maxFilenameLength; }
+	for my $threshold (@column_sizes) {
+		$columns++ if $maxFilenameLength <= $threshold;
+	}
+	my $itemsPerColumn = @raw % $columns ? int(@raw/$columns)+1 : @raw/$columns;
+
+	my $index = {};
+	if (opendir(DH,sprintf('%s/%s',$r->document_root,$icons_dir))) {
+		foreach my $icon (grep(/^[a-z0-9]+\.(png|gif)$/i,readdir(DH))) {
+			(my $ext = $icon) =~ s/\..+$//;
+			$index->{$ext} = $ext;
+		}
+		closedir(DH);
+	}
+
+	similar_icons: {
+		my $similar = {
+					xsl	=> [ qw(xml xslt) ],
+					htm	=> [ qw(html shtml) ],
+					ra	=> [ qw(rm ram) ],
+					zip	=> [ qw(tgz tar gz bz2 arj lhz rar) ],
+					xls	=> [ qw(csv tab) ],
+				};
+		for my $icon (keys %{$similar}) {
+			for my $ext (@{$similar->{$icon}}) {
+				$index->{$ext} = $icon unless exists $index->{$ext};
+			}
+		}
+	}
+
+	if (open(FH,sprintf('%s/%s/extensions.map',$r->document_root,$icons_dir))) {
+		while (<FH>) { next if /^\s*#/;
+			if (/^(\S+)\s+(\S+)\s*$/) {
+				$index->{$1} = $2;
+			}
+		}
+		close(FH);
+	}
+
+	my $ft;
+	if (lc($type_text) eq 'mimetype') {
+		eval { require File::Type; };
+		$ft = new File::Type;
+	}
+	my $format = new Number::Format();
+
+	sub checkPerms {
+		my $file = shift;
+		if (!-r $file || (-d $file && !-x $file)) {
+			return ' class="denied" ';
+		}
+		return '';
+	}
+
+	sub genFileInfo {
+		my ($file,$format,$type_text,$ft,$date_format) = @_;
+		(my $ext = $file) =~ s/.*\.//;
+		my $size = $format->format_bytes(-s $file,2).'B';
+		$size =~ s/([A-Z]+)/ $1/;
+		my $output = sprintf("Type: %s<br />Date Modified: %s<br />Size: %s",
+				(-d $file ? 'Directory' : 
+					(lc($type_text) eq 'mimetype' ? $ft->checktype_filename($file) :
+						uc($ext).' File')),
+				Date::Format::time2str($date_format, (stat($file))[9]),
+				$size
+			);
+		return $output;
+	}
+
+	sub file2icon {
+		my ($file,$index) = @_;
+		#my $icon = -d $file ? (-x $file ? '__dir' : '__dir_nox') : (-r $file ? '__unknown' : '__broken');
+		my $icon = -d $file ? '__dir' : '__unknown'; # We now have proper fading of icons
+		$icon = '__broken' if -l $file && !-e readlink($file);
+		$icon = '__back' if $file =~ m/\.\.$/;
+		if (-d $file) {
+			if ($file =~ m|/My Pictures$|i) { $icon = '__my_pictures'; }
+			elsif ($file =~ m|/My Videos$|i) { $icon = '__my_videos'; }
+			elsif ($file =~ m|/My Documents$|i) { $icon = '__my_documents'; }
+			elsif ($file =~ m|/My Music$|i) { $icon = '__my_music'; }
+		}
+		(my $ext = lc($file)) =~ s/.*\.//;
+		$icon = $index->{$ext} if exists $index->{$ext};
+		return $icon;
+	}
+</%init>
+<%once>
+	require Number::Format;
+	require Date::Format;
+</%once>
